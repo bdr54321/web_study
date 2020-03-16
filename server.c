@@ -1,12 +1,16 @@
 /*
-1. 实现最简单的、单独一次连接的tcp服务器，直接socket bind, listen, accept搞定。客户端不用写，先用 telnet直接连你的server测验。
-注：程序：telnet发送字符串，服务器接受，并把小写转换为大写，再发送回去
+3. 改写第一步的简单服务器，采用fork方式，多进程条件下，实现多客户端的支持。
+注：程序：telnet发送字符串，服务器接受，并把小写转换为大写，再发送回去。
+          服务器多进程
+          
+问题记录
+1.僵死进程的处理
+解决：  见handler函数
+  
+2.在客户端输入end后，服务器端对应子进程终止，但客户端却处于半关闭状态
+解决：在每个对应进程，都需要先把不再用的文件描述符关闭，因为父子进程共享套接字描述符，并且采用引用计数
 
-遇到的问题一：服务器端主动关闭连接或者ctrl+c异常终止，再次开启服务器需要等一段时间
-原因：        服务器不管是哪种关闭方式（包括ctrl + c），都属于主动关闭，在发送完最后一个确认              信号后，需要等待一段时间才能真正关闭
-
-遇到的问题二：telnet会收到乱码
-原因：        telnet每次发送的字符串会在末尾加上/r/n换行符
+3.系统函数signal和waitpid和僵死进程
 
 */
 
@@ -16,6 +20,8 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #define PORT 9990 //端口号
 #define SIZE 1024 //定义的数组大小
@@ -79,15 +85,11 @@ void hanld_client(int client_socket) //信息处理函数,功能是将客户端�
 			perror("read");
 			break;
 		}
+		//客户端主动终止
 		if (ret == 0)
 		{
 			break;
 		}
-        if(strncmp(buf, "q", 1) == 0)
-		{
-			break;
-		}
-
 		//这里的减二是经过测试，发现telnet每次都会多发两个无用字符作为结束标
 		//经wireshark抓包工具分析：linux telnet发送报文 然后以回车键结束,发送的报文中末尾 默认会加入\r\n
 		buf[ret-1] = '\n';
@@ -99,20 +101,59 @@ void hanld_client(int client_socket) //信息处理函数,功能是将客户端�
 			buf[i] = buf[i] + 'A' - 'a';
 		}		
 		write(client_socket, buf, ret);
+		//客户端发送end，服务器端先终止(这里由于用telnet做客户端，只能用服务器终止了，每次终止后都得停一会才能再次运行)
+		if(strncmp(buf, "END", 3) == 0)
+		{
+			break;
+		}
+		
 	}
 	close(client_socket);
+}
+
+void handler(int sig)
+{
+	//循环的过程就是留时间给父进程处理僵死进程
+	while (waitpid(-1,  NULL,   WNOHANG) > 0)
+	{
+		printf ("成功处理一个子进程的退出\n");
+	}
 }
 
 int main()
 {
 	int listen_socket = Creat_socket();
-
-	int client_socket = wait_client(listen_socket);
-
-	hanld_client(client_socket);
-
-     //监听套接字和客户端套接字不等
-	close(listen_socket);
-
+	
+    //SIGCHLD就是内核在任何一个进程终止时发送给父进程的一个信号。
+	signal(SIGCHLD,  handler);    //处理子进程，防止僵尸进程的产生
+	while(1)
+	{
+		int client_socket = wait_client(listen_socket);   //多进程服务器，可以创建子进程来处理，父进程负责监听。
+		
+	    // 1）在父进程中，fork返回新创建子进程的进程ID；
+        // 2）在子进程中，fork返回0；
+        // 3）如果出现错误，fork返回一个负值；
+		int pid = fork();
+		if(pid == -1)
+		{
+			perror("fork");
+			break;
+		}
+		//位于父进程
+		if(pid > 0)
+		{					
+		    close(client_socket);//释放不用资源
+			continue;
+		}
+		//位于子进程
+		if(pid == 0)
+		{
+			close(listen_socket);//释放不用资源
+			hanld_client(client_socket);
+			close(client_socket);
+			break;
+		}
+	}
 	return 0;
+
 }
