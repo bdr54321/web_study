@@ -1,3 +1,15 @@
+/*
+1. 实现最简单的、单独一次连接的tcp服务器，直接socket bind, listen, accept搞定。客户端不用写，先用 telnet直接连你的server测验。
+注：程序：telnet发送字符串，服务器接受，并把小写转换为大写，再发送回去
+
+遇到的问题一：服务器端主动关闭连接或者ctrl+c异常终止，再次开启服务器需要等一段时间
+原因：        服务器不管是哪种关闭方式（包括ctrl + c），都属于主动关闭，在发送完最后一个确认              信号后，需要等待一段时间才能真正关闭
+
+遇到的问题二：telnet会收到乱码
+原因：        telnet每次发送的字符串会在末尾加上/r/n换行符
+
+*/
+
 #include <arpa/inet.h>
 #include <stdio.h>
 #include <string.h>
